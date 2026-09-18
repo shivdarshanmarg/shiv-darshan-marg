@@ -101,7 +101,7 @@
 
   <div class="community-box">
     <span>Sangathana Chants</span>
-    <div class="community-total" id="globalDisplay">Loading...</div>
+    <div class="community-total" id="globalDisplay">0</div>
   </div>
 
   <div class="counter-container">
@@ -118,13 +118,23 @@
   </div>
 
   <script>
-    // PUT YOUR KEYS HERE:
+    // --- REPLACE THESE TWO LINES WITH YOUR REAL SUPABASE KEYS ---
     const SUPABASE_URL = 'PASTE_YOUR_SUPABASE_URL_HERE';
     const SUPABASE_ANON_KEY = 'PASTE_YOUR_ANON_KEY_HERE';
-    const db = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+    // -------------------------------------------------------------
+
+    let db = null;
+    if (SUPABASE_URL !== 'https://gmnpazahpvqjwljcbzpy.supabase.co' && SUPABASE_ANON_KEY !== 'sb_publishable_eaMK-kuedvfs2g_8hVt7mg__TIHz7ZH') {
+      try {
+        db = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+      } catch (err) {
+        console.error("Supabase init error:", err);
+      }
+    }
 
     let beads = parseInt(localStorage.getItem('sdm_beads')) || 0;
     let malas = parseInt(localStorage.getItem('sdm_malas')) || 0;
+    let localGlobal = parseInt(localStorage.getItem('sdm_local_global')) || 0;
     let vibrateEnabled = true;
 
     const beadEl = document.getElementById('beadDisplay');
@@ -135,17 +145,27 @@
     function updateLocalUI() {
       beadEl.innerText = beads;
       malaEl.innerText = `Mala: ${malas}`;
+      if (!db) {
+        globalEl.innerText = localGlobal.toLocaleString('en-IN');
+      }
     }
 
     async function fetchTotalChants() {
-      const { data } = await db.from('jaap_counter').select('total_chants').eq('id', 1).single();
-      if (data) {
-        globalEl.innerText = Number(data.total_chants).toLocaleString('en-IN');
+      if (!db) return;
+      try {
+        const { data, error } = await db.from('jaap_counter').select('total_chants').eq('id', 1).single();
+        if (data && !error) {
+          globalEl.innerText = Number(data.total_chants).toLocaleString('en-IN');
+        }
+      } catch (e) {
+        console.error(e);
       }
     }
 
     async function doChant() {
       beads++;
+      localGlobal++;
+
       if (vibrateEnabled && navigator.vibrate) {
         navigator.vibrate(40);
       }
@@ -160,12 +180,19 @@
 
       localStorage.setItem('sdm_beads', beads);
       localStorage.setItem('sdm_malas', malas);
+      localStorage.setItem('sdm_local_global', localGlobal);
       updateLocalUI();
 
-      // Update online database
-      const { data } = await db.from('jaap_counter').select('total_chants').eq('id', 1).single();
-      if (data) {
-        await db.from('jaap_counter').update({ total_chants: data.total_chants + 1 }).eq('id', 1);
+      // Cloud Sync
+      if (db) {
+        try {
+          const { data } = await db.from('jaap_counter').select('total_chants').eq('id', 1).single();
+          if (data) {
+            await db.from('jaap_counter').update({ total_chants: data.total_chants + 1 }).eq('id', 1);
+          }
+        } catch (e) {
+          console.error(e);
+        }
       }
     }
 
@@ -182,16 +209,19 @@
       document.getElementById('vibBtn').innerText = `Vibrate: ${vibrateEnabled ? 'ON' : 'OFF'}`;
     }
 
-    // Listen for live counts from others
-    db.channel('public:jaap_counter')
-      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'jaap_counter' }, payload => {
-        globalEl.innerText = Number(payload.new.total_chants).toLocaleString('en-IN');
-      })
-      .subscribe();
+    if (db) {
+      db.channel('public:jaap_counter')
+        .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'jaap_counter' }, payload => {
+          if (payload && payload.new) {
+            globalEl.innerText = Number(payload.new.total_chants).toLocaleString('en-IN');
+          }
+        })
+        .subscribe();
+      fetchTotalChants();
+    }
 
     tapBtn.addEventListener('click', doChant);
     updateLocalUI();
-    fetchTotalChants();
   </script>
 </body>
 </html>
